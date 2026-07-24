@@ -1,14 +1,33 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { uploadToImgBB, uploadFileToImgBB, type ImageConvertResult } from "@/lib/imgbb";
 import { useToasts } from "@/components/Toast";
+import { useModal } from "@/components/Modal";
+import { loadConversions, saveConversions, clearAllData } from "@/lib/storage";
 import Link from "next/link";
 
 type InputMode = "url" | "file";
 
+/** Convert a SavedConversion into an ImageConvertResult for display in the grid */
+function savedToResult(conv: { id: string; originalUrl: string; newUrl: string; thumbnailUrl?: string; success: boolean; error?: string; savedAt: number }): ImageConvertResult {
+  return {
+    id: conv.id,
+    originalName: conv.originalUrl.split("/").pop() || "image",
+    originalUrl: conv.originalUrl,
+    thumbnailUrl: conv.thumbnailUrl || conv.newUrl,
+    directUrl: conv.success ? conv.newUrl : "",
+    bbCodeUrl: conv.success ? `[img]${conv.newUrl}[/img]` : "",
+    deleteUrl: "",
+    size: 0,
+    success: conv.success,
+    error: conv.error,
+  };
+}
+
 export default function ConvertPage() {
   const { addToast } = useToasts();
+  const { showConfirm } = useModal();
   const [inputMode, setInputMode] = useState<InputMode>("url");
   const [urlInput, setUrlInput] = useState("");
   const [isConverting, setIsConverting] = useState(false);
@@ -17,7 +36,78 @@ export default function ConvertPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Convert a single image URL
+  // ─── Load saved conversions into the grid on mount ────────────────────
+  useEffect(() => {
+    const saved = loadConversions();
+    if (saved.length > 0) {
+      setResults(saved.map(savedToResult));
+    }
+  }, []);
+
+  // ─── Persist helper: save to localStorage + add to grid ──────────────
+  const persistAndShow = useCallback((result: ImageConvertResult) => {
+    // Save to localStorage
+    const saved = loadConversions();
+    const entry = {
+      id: result.id,
+      originalUrl: result.originalUrl || result.originalName,
+      newUrl: result.directUrl,
+      thumbnailUrl: result.thumbnailUrl,
+      success: result.success,
+      error: result.error,
+      savedAt: Date.now(),
+    };
+    saveConversions([entry, ...saved]);
+    // Add to grid
+    setResults((prev) => [result, ...prev]);
+  }, []);
+
+  const persistFailed = useCallback((originalUrl: string, error?: string) => {
+    const saved = loadConversions();
+    const entry = {
+      id: crypto.randomUUID(),
+      originalUrl,
+      newUrl: "",
+      success: false,
+      error,
+      savedAt: Date.now(),
+    };
+    saveConversions([entry, ...saved]);
+    setResults((prev) => [
+      {
+        id: entry.id,
+        originalName: originalUrl.split("/").pop() || "image",
+        originalUrl,
+        thumbnailUrl: "",
+        directUrl: "",
+        bbCodeUrl: "",
+        deleteUrl: "",
+        size: 0,
+        success: false,
+        error,
+      },
+      ...prev,
+    ]);
+  }, []);
+
+  // ─── Reset All ───────────────────────────────────────────────────────
+  const handleResetAll = useCallback(() => {
+    showConfirm({
+      title: "Reset Everything",
+      message: "This will permanently delete all converted images. Are you sure?",
+      confirmLabel: "Reset All",
+      cancelLabel: "Cancel",
+      variant: "danger",
+    }).then((confirmed) => {
+      if (confirmed) {
+        clearAllData();
+        setResults([]);
+        addToast("All data has been reset", "info");
+      }
+    });
+  }, [showConfirm, addToast]);
+
+  // ─── Convert a single image URL ──────────────────────────────────────
   const convertUrl = useCallback(async () => {
     const trimmed = urlInput.trim();
     if (!trimmed) {
@@ -25,7 +115,6 @@ export default function ConvertPage() {
       return;
     }
 
-    // Validate it looks like a URL
     if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
       addToast("Please enter a valid URL (http:// or https://)", "warning");
       return;
@@ -46,14 +135,15 @@ export default function ConvertPage() {
         size: response.data.size,
         success: true,
       };
-      setResults((prev) => [result, ...prev]);
+      persistAndShow(result);
       addToast("Image converted successfully!", "success");
       setUrlInput("");
     } else {
       addToast(`Failed: ${response.error}`, "error");
+      persistFailed(trimmed, response.error);
     }
     setIsConverting(false);
-  }, [urlInput, addToast]);
+  }, [urlInput, addToast, persistAndShow, persistFailed]);
 
   // Handle Enter key on URL input
   const handleUrlKeyDown = (e: React.KeyboardEvent) => {
@@ -63,16 +153,13 @@ export default function ConvertPage() {
     }
   };
 
-  // Convert uploaded files
+  // ─── Convert uploaded files ──────────────────────────────────────────
   const convertFiles = useCallback(
     async (files: FileList | File[]) => {
       const fileArray = Array.from(files);
       if (fileArray.length === 0) return;
 
-      // Filter for image types
-      const imageFiles = fileArray.filter((f) =>
-        f.type.startsWith("image/")
-      );
+      const imageFiles = fileArray.filter((f) => f.type.startsWith("image/"));
       if (imageFiles.length === 0) {
         addToast("Please select image files only", "warning");
         return;
@@ -82,10 +169,7 @@ export default function ConvertPage() {
 
       for (let i = 0; i < imageFiles.length; i++) {
         const file = imageFiles[i];
-        addToast(
-          `Converting ${i + 1}/${imageFiles.length}: ${file.name}`,
-          "info"
-        );
+        addToast(`Converting ${i + 1}/${imageFiles.length}: ${file.name}`, "info");
 
         const response = await uploadFileToImgBB(file);
 
@@ -100,20 +184,9 @@ export default function ConvertPage() {
             size: response.data.size,
             success: true,
           };
-          setResults((prev) => [result, ...prev]);
+          persistAndShow(result);
         } else {
-          const result: ImageConvertResult = {
-            id: crypto.randomUUID(),
-            originalName: file.name,
-            thumbnailUrl: "",
-            directUrl: "",
-            bbCodeUrl: "",
-            deleteUrl: "",
-            size: file.size,
-            success: false,
-            error: response.error,
-          };
-          setResults((prev) => [result, ...prev]);
+          persistFailed(file.name, response.error);
           addToast(`Failed: ${file.name} - ${response.error}`, "error");
         }
       }
@@ -121,7 +194,7 @@ export default function ConvertPage() {
       addToast(`Converted ${imageFiles.length} image(s)`, "success");
       setIsConverting(false);
     },
-    [addToast]
+    [addToast, persistAndShow, persistFailed]
   );
 
   // File input change
@@ -167,18 +240,32 @@ export default function ConvertPage() {
 
   // Format file size
   const formatSize = (bytes: number) => {
+    if (bytes === 0) return "";
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  // Clear all results
+  // Clear all results (grid + localStorage)
   const clearResults = () => {
     if (results.length > 0) {
-      setResults([]);
-      addToast("Results cleared", "info");
+      showConfirm({
+        title: "Clear All Results",
+        message: "Remove all converted images from the grid and saved history?",
+        confirmLabel: "Clear",
+        cancelLabel: "Cancel",
+        variant: "danger",
+      }).then((confirmed) => {
+        if (confirmed) {
+          setResults([]);
+          saveConversions([]);
+          addToast("All results cleared", "info");
+        }
+      });
     }
   };
+
+  const successCount = results.filter((r) => r.success).length;
 
   return (
     <div className="flex flex-col h-full bg-[#07070b]">
@@ -218,9 +305,18 @@ export default function ConvertPage() {
                 onClick={clearResults}
                 className="rounded-lg border border-white/[0.04] bg-zinc-800/30 px-2.5 py-1.5 text-[11px] font-medium text-zinc-500 transition-all hover:border-rose-500/20 hover:bg-rose-500/5 hover:text-rose-400"
               >
-                Clear results
+                Clear all
               </button>
             )}
+
+            <button
+              onClick={handleResetAll}
+              disabled={results.length === 0}
+              className="rounded-lg border border-white/[0.04] bg-zinc-800/30 px-2.5 py-1.5 text-[11px] font-medium text-zinc-500 transition-all hover:border-rose-500/20 hover:bg-rose-500/5 hover:text-rose-400 disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Reset all saved conversion data"
+            >
+              Reset
+            </button>
 
             <Link
               href="/"
@@ -366,7 +462,7 @@ export default function ConvertPage() {
         )}
       </div>
 
-      {/* Results Section */}
+      {/* Results Grid — unified: shows both session + saved */}
       <div className="flex-1 overflow-y-auto px-4 lg:px-6 py-4">
         {results.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
@@ -379,7 +475,7 @@ export default function ConvertPage() {
             </div>
             <h3 className="text-sm font-medium text-zinc-500">No conversions yet</h3>
             <p className="text-xs text-zinc-700 mt-1 max-w-xs">
-              Paste an image URL or upload files above. Converted images and their ImgBB links will appear here.
+              Paste an image URL or upload files above. Converted images will appear here and persist across sessions.
             </p>
           </div>
         ) : (
@@ -387,6 +483,11 @@ export default function ConvertPage() {
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-medium text-zinc-500">
                 {results.length} image{results.length !== 1 ? "s" : ""} converted
+                {successCount > 0 && (
+                  <span className="text-emerald-500/50 ml-2">
+                    {successCount} successful
+                  </span>
+                )}
               </span>
             </div>
 
@@ -416,29 +517,33 @@ export default function ConvertPage() {
 
                     {/* Overlay actions on hover */}
                     {result.success && (
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all duration-200 flex items-center justify-center opacity-0 group-hover:opacity-100">
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all duration-200 flex items-center justify-between px-2 py-2 opacity-0 group-hover:opacity-100">
                         <a
                           href={result.directUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="rounded-lg border border-white/20 bg-black/50 px-3 py-1.5 text-[10px] font-medium text-white backdrop-blur-sm transition-all hover:bg-black/70"
+                          className="rounded-lg border border-white/20 bg-black/50 px-2.5 py-1 text-[9px] font-medium text-white backdrop-blur-sm transition-all hover:bg-black/70"
                         >
-                          Open original
+                          Open
                         </a>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // Remove from grid
+                            setResults((prev) => prev.filter((r) => r.id !== result.id));
+                            // Remove from localStorage
+                            const saved = loadConversions();
+                            saveConversions(saved.filter((s) => s.id !== result.id));
+                            // If ImgBB delete URL exists, open it too
+                            if (result.deleteUrl) {
+                              window.open(result.deleteUrl, "_blank");
+                            }
+                          }}
+                          className="rounded-lg border border-white/20 bg-black/50 px-2.5 py-1 text-[9px] font-medium text-zinc-400 backdrop-blur-sm transition-all hover:bg-red-500/50 hover:text-white"
+                        >
+                          Remove
+                        </button>
                       </div>
-                    )}
-
-                    {/* Delete URL badge */}
-                    {result.success && (
-                      <a
-                        href={result.deleteUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="absolute top-2 right-2 rounded border border-white/[0.06] bg-black/40 px-1.5 py-0.5 text-[8px] text-zinc-500 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400"
-                        title="Delete image from ImgBB"
-                      >
-                        Delete
-                      </a>
                     )}
                   </div>
 
@@ -449,9 +554,11 @@ export default function ConvertPage() {
                       <span className="text-[10px] font-medium text-zinc-400 truncate flex-1">
                         {result.originalName}
                       </span>
-                      <span className="text-[9px] text-zinc-600 whitespace-nowrap">
-                        {formatSize(result.size)}
-                      </span>
+                      {result.size > 0 && (
+                        <span className="text-[9px] text-zinc-600 whitespace-nowrap">
+                          {formatSize(result.size)}
+                        </span>
+                      )}
                     </div>
 
                     {/* Direct link + copy */}
@@ -516,12 +623,12 @@ export default function ConvertPage() {
         <div className="flex items-center gap-3">
           <span className="text-[10px] text-zinc-600/60">Total converted</span>
           <span className="text-[11px] font-mono text-zinc-400 tabular-nums">{results.length}</span>
-          {results.filter((r) => r.success).length > 0 && (
+          {successCount > 0 && (
             <>
               <span className="text-zinc-700/50">|</span>
               <span className="text-[10px] text-emerald-600/60">Successful</span>
               <span className="text-[11px] font-mono text-emerald-400/70 tabular-nums">
-                {results.filter((r) => r.success).length}
+                {successCount}
               </span>
             </>
           )}

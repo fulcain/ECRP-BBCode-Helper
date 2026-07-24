@@ -7,6 +7,15 @@ import ImgurConverter from "@/components/ImgurConverter";
 import { useToasts } from "@/components/Toast";
 import { useModal } from "@/components/Modal";
 import { tagCategories, type BBCodeTag } from "@/lib/bbcode";
+import {
+  loadEditorText,
+  saveEditorText,
+  loadConversions,
+  saveConversions,
+  clearAllData,
+  type SavedConversion,
+} from "@/lib/storage";
+
 import Link from "next/link";
 
 export default function Home() {
@@ -17,9 +26,52 @@ export default function Home() {
   const [charCount, setCharCount] = useState(0);
   const [lineCount, setLineCount] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [savedIndicator, setSavedIndicator] = useState<"saved" | "saving" | null>(null);
+  const [conversions, setConversions] = useState<SavedConversion[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const indicatorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { addToast } = useToasts();
   const { showConfirm, showPrompt } = useModal();
+
+  // ─── Load saved data on mount ───────────────────────────────────────────
+  useEffect(() => {
+    const savedText = loadEditorText();
+    if (savedText) {
+      setText(savedText);
+      setCharCount(savedText.length);
+      setWordCount(savedText.trim() ? savedText.trim().split(/\s+/).length : 0);
+      setLineCount(savedText ? savedText.split("\n").length : 0);
+    }
+    setConversions(loadConversions());
+  }, []);
+
+  // ─── Auto-save: debounced save when text changes ──────────────────────
+  useEffect(() => {
+    // Skip the initial empty-text save
+    if (text === "" && charCount === 0) return;
+
+    // Clear previous timer
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    setSavedIndicator("saving");
+
+    saveTimerRef.current = setTimeout(() => {
+      saveEditorText(text);
+      setSavedIndicator("saved");
+
+      // Clear indicator after 2s
+      if (indicatorTimerRef.current) clearTimeout(indicatorTimerRef.current);
+      indicatorTimerRef.current = setTimeout(() => {
+        setSavedIndicator(null);
+      }, 2000);
+    }, 600); // 600ms debounce
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (indicatorTimerRef.current) clearTimeout(indicatorTimerRef.current);
+    };
+  }, [text]);
 
   // Update stats
   const updateStats = useCallback((val: string) => {
@@ -207,6 +259,25 @@ export default function Home() {
 
   const handleApplyTag = useCallback((tag: BBCodeTag) => applyTag(tag), [applyTag]);
 
+  // ─── Reset All: wipe editor text + conversion history ─────────────────────
+  const handleResetAll = useCallback(() => {
+    showConfirm({
+      title: "Reset Everything",
+      message: "This will permanently delete your editor text and all conversion history. Are you sure?",
+      confirmLabel: "Reset All",
+      cancelLabel: "Cancel",
+      variant: "danger",
+    }).then((confirmed) => {
+      if (confirmed) {
+        clearAllData();
+        setText("");
+        updateStats("");
+        setConversions([]);
+        addToast("All data has been reset", "info");
+      }
+    });
+  }, [showConfirm, addToast, updateStats]);
+
   return (
     <div className="flex flex-col h-full bg-[#07070b]">
       {/* Gradient accent line at top */}
@@ -288,8 +359,6 @@ export default function Home() {
               <span className="hidden sm:inline">Imgur</span>
             </button>
 
-            <div className="h-5 w-px bg-white/[0.04] mx-1" />
-
             {/* Quick insert list item */}
             <button
               onClick={insertListItem}
@@ -327,7 +396,7 @@ export default function Home() {
               )}
             </button>
 
-            {/* Clear */}
+            {/* Clear text */}
             <button
               onClick={clearText}
               className="rounded-lg border border-white/[0.04] bg-zinc-800/30 px-2 py-1.5 text-[11px] font-medium text-zinc-600 transition-all hover:border-rose-500/20 hover:bg-rose-500/5 hover:text-rose-400"
@@ -338,6 +407,22 @@ export default function Home() {
                 <polyline points="3 6 5 6 21 6"/>
                 <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
               </svg>
+            </button>
+
+            {/* Reset All */}
+            <button
+              onClick={handleResetAll}
+              className="rounded-lg border border-white/[0.04] bg-zinc-800/30 px-2 py-1.5 text-[11px] font-medium text-zinc-600 transition-all hover:border-rose-500/20 hover:bg-rose-500/5 hover:text-rose-400"
+              title="Reset all data — editor text & conversion history"
+              disabled={!text && conversions.length === 0}
+            >
+              <span className="flex items-center gap-1">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8"/>
+                  <path d="M3 3v5h5"/>
+                </svg>
+                Reset
+              </span>
             </button>
           </div>
         </div>
@@ -368,6 +453,12 @@ export default function Home() {
           onTextUpdate={(newText) => updateStats(newText)}
           isOpen={true}
           onClose={() => setShowImgurConverter(false)}
+          onConversionResults={(results) => {
+            const existing = loadConversions();
+            const merged = [...results, ...existing];
+            saveConversions(merged);
+            setConversions(merged);
+          }}
         />
       </div>
 
@@ -435,7 +526,23 @@ export default function Home() {
                   Imgur
                 </span>
               )}
+
             </div>
+          )}
+          {/* Auto-save indicator */}
+          {savedIndicator === "saving" && (
+            <span className="inline-flex items-center gap-1 rounded border border-amber-500/10 bg-amber-500/5 px-1.5 py-0.5 text-[9px] text-amber-500/50 animate-fade-in">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500/50 animate-pulse" />
+              Saving
+            </span>
+          )}
+          {savedIndicator === "saved" && (
+            <span className="inline-flex items-center gap-1 rounded border border-emerald-500/10 bg-emerald-500/5 px-1.5 py-0.5 text-[9px] text-emerald-500/60 animate-fade-in">
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              Saved
+            </span>
           )}
           <span className="text-[9px] text-zinc-700 font-mono">v1.0</span>
         </div>

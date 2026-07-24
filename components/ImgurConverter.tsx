@@ -8,11 +8,14 @@ import {
   type ConversionResult,
 } from "@/lib/imgbb";
 
+import type { SavedConversion } from "@/lib/storage";
+
 interface ImgurConverterProps {
   text: string;
   onTextUpdate: (newText: string) => void;
   isOpen: boolean;
   onClose: () => void;
+  onConversionResults?: (results: SavedConversion[]) => void;
 }
 
 export default function ImgurConverter({
@@ -20,6 +23,7 @@ export default function ImgurConverter({
   onTextUpdate,
   isOpen,
   onClose,
+  onConversionResults,
 }: ImgurConverterProps) {
   const [url, setUrl] = useState("");
   const [isBatchMode, setIsBatchMode] = useState(true);
@@ -46,12 +50,28 @@ export default function ImgurConverter({
     const response = await uploadToImgBB(imgurUrl);
     if (response.success && response.data) {
       setSingleResult(`✅ Converted! Direct URL: ${response.data.url}`);
+      onConversionResults?.([{
+        id: crypto.randomUUID(),
+        originalUrl: imgurUrl,
+        newUrl: response.data.url,
+        thumbnailUrl: response.data.thumb.url,
+        success: true,
+        savedAt: Date.now(),
+      }]);
     } else {
       setSingleResult(`❌ Failed: ${response.error}`);
+      onConversionResults?.([{
+        id: crypto.randomUUID(),
+        originalUrl: imgurUrl,
+        newUrl: imgurUrl,
+        success: false,
+        error: response.error,
+        savedAt: Date.now(),
+      }]);
     }
 
     setIsConverting(false);
-  }, [url]);
+  }, [url, onConversionResults]);
 
   // Batch convert all imgur links in the text
   const batchConvert = useCallback(async () => {
@@ -61,6 +81,7 @@ export default function ImgurConverter({
     setResults([]);
     let currentText = text;
     let currentIndex = 0;
+    const savedConversions: SavedConversion[] = [];
 
     for (let i = 0; i < imgurLinksInText.length; i++) {
       const imgurUrl = imgurLinksInText[i];
@@ -76,6 +97,15 @@ export default function ImgurConverter({
         };
         setResults((prev) => [...prev, result]);
         currentText = currentText.split(imgurUrl).join(response.data.url);
+
+        savedConversions.push({
+          id: crypto.randomUUID(),
+          originalUrl: imgurUrl,
+          newUrl: response.data.url,
+          thumbnailUrl: response.data.thumb.url,
+          success: true,
+          savedAt: Date.now(),
+        });
       } else {
         setResults((prev) => [
           ...prev,
@@ -86,13 +116,23 @@ export default function ImgurConverter({
             error: response.error,
           },
         ]);
+
+        savedConversions.push({
+          id: crypto.randomUUID(),
+          originalUrl: imgurUrl,
+          newUrl: imgurUrl,
+          success: false,
+          error: response.error,
+          savedAt: Date.now(),
+        });
       }
     }
 
     onTextUpdate(currentText);
+    onConversionResults?.(savedConversions);
     setIsConverting(false);
     setProgress({ current: 0, total: 0 });
-  }, [text, imgurLinksInText, onTextUpdate]);
+  }, [text, imgurLinksInText, onTextUpdate, onConversionResults]);
 
   if (!isOpen) return null;
 
