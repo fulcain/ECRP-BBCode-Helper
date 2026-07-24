@@ -47,41 +47,28 @@ export interface ConversionResult {
   error?: string;
 }
 
-/** Extract direct image URL from an imgur link */
-export function extractImgurUrl(input: string): string | null {
-  // Handle various imgur formats:
-  // https://imgur.com/abc123
-  // https://imgur.com/abc123.jpg
-  // https://i.imgur.com/abc123.jpg
-  // https://i.imgur.com/abc123.png
-  // http://imgur.com/abc123
+/** ImgBB domains — skip these when converting */
+const IMGBB_DOMAINS = ["i.ibb.co", "ibb.co"];
 
-  const patterns = [
-    /https?:\/\/(?:i\.)?imgur\.com\/([a-zA-Z0-9]+)(?:\.[a-zA-Z]+)?/,
-    /https?:\/\/imgur\.com\/([a-zA-Z0-9]+)/,
-    /https?:\/\/i\.imgur\.com\/([a-zA-Z0-9]+(?:\.[a-zA-Z]+)?)/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = input.match(pattern);
-    if (match) {
-      const id = match[1].replace(/\.[a-zA-Z]+$/, "");
-      return `https://i.imgur.com/${id}.png`;
-    }
+function isImgBBUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return IMGBB_DOMAINS.includes(host);
+  } catch {
+    return false;
   }
-
-  return null;
 }
 
-/** Find all imgur URLs in a text string */
-export function findAllImgurUrls(text: string): string[] {
+/** Find all image URLs inside [img]...[/img] tags, skipping ImgBB URLs */
+export function findAllImgTagUrls(text: string): string[] {
   const urls: string[] = [];
-  const pattern = /https?:\/\/(?:i\.)?imgur\.com\/[a-zA-Z0-9]+(?:\.[a-zA-Z]+)?/g;
+  // Match [img]URL[/img] with optional whitespace
+  const pattern = /\[img\]\s*(https?:\/\/[^\]\s]+)\s*\[\/img\]/gi;
   let match;
   while ((match = pattern.exec(text)) !== null) {
-    const normalized = extractImgurUrl(match[0]);
-    if (normalized && !urls.includes(normalized)) {
-      urls.push(normalized);
+    const url = match[1].trim();
+    if (!isImgBBUrl(url) && !urls.includes(url)) {
+      urls.push(url);
     }
   }
   return urls;
@@ -125,43 +112,6 @@ export async function uploadToImgBB(
           : "Network error uploading to ImgBB",
     };
   }
-}
-
-/** Convert all imgur URLs in a text to imgbb URLs */
-export async function convertImgurToImgBB(
-  text: string,
-  onProgress?: (current: number, total: number, result: ConversionResult) => void
-): Promise<{ text: string; results: ConversionResult[] }> {
-  const imgurUrls = findAllImgurUrls(text);
-  const results: ConversionResult[] = [];
-  let newText = text;
-
-  for (let i = 0; i < imgurUrls.length; i++) {
-    const url = imgurUrls[i];
-    const response = await uploadToImgBB(url);
-
-    if (response.success && response.data) {
-      const result: ConversionResult = {
-        originalUrl: url,
-        newUrl: response.data.url,
-        success: true,
-      };
-      results.push(result);
-      newText = newText.split(url).join(response.data.url);
-    } else {
-      const result: ConversionResult = {
-        originalUrl: url,
-        newUrl: url,
-        success: false,
-        error: response.error,
-      };
-      results.push(result);
-    }
-
-    onProgress?.(i + 1, imgurUrls.length, results[results.length - 1]);
-  }
-
-  return { text: newText, results };
 }
 
 /** Upload a File/Blob to ImgBB */

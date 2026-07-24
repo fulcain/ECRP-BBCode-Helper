@@ -3,8 +3,7 @@
 import { useState, useCallback } from "react";
 import {
   uploadToImgBB,
-  extractImgurUrl,
-  findAllImgurUrls,
+  findAllImgTagUrls,
   type ConversionResult,
 } from "@/lib/imgbb";
 
@@ -32,27 +31,27 @@ export default function ImgurConverter({
   const [results, setResults] = useState<ConversionResult[]>([]);
   const [singleResult, setSingleResult] = useState<string | null>(null);
 
-  // Scan for imgur links in the text
-  const imgurLinksInText = findAllImgurUrls(text);
-  const hasImgurLinks = imgurLinksInText.length > 0;
+  // Scan for image URLs inside [img] tags (skip ImgBB)
+  const imageLinksInText = findAllImgTagUrls(text);
+  const hasImageLinks = imageLinksInText.length > 0;
 
   // Convert a single URL
   const convertSingleUrl = useCallback(async () => {
-    const imgurUrl = extractImgurUrl(url);
-    if (!imgurUrl) {
-      setSingleResult("Invalid Imgur URL. Please paste a valid imgur.com link.");
+    const trimmed = url.trim();
+    if (!trimmed || !trimmed.startsWith("http")) {
+      setSingleResult("Please paste a valid image URL (http/https).");
       return;
     }
 
     setIsConverting(true);
     setSingleResult(null);
 
-    const response = await uploadToImgBB(imgurUrl);
+    const response = await uploadToImgBB(trimmed);
     if (response.success && response.data) {
       setSingleResult(`✅ Converted! Direct URL: ${response.data.url}`);
       onConversionResults?.([{
         id: crypto.randomUUID(),
-        originalUrl: imgurUrl,
+        originalUrl: trimmed,
         newUrl: response.data.url,
         thumbnailUrl: response.data.thumb.url,
         success: true,
@@ -62,8 +61,8 @@ export default function ImgurConverter({
       setSingleResult(`❌ Failed: ${response.error}`);
       onConversionResults?.([{
         id: crypto.randomUUID(),
-        originalUrl: imgurUrl,
-        newUrl: imgurUrl,
+        originalUrl: trimmed,
+        newUrl: trimmed,
         success: false,
         error: response.error,
         savedAt: Date.now(),
@@ -73,34 +72,33 @@ export default function ImgurConverter({
     setIsConverting(false);
   }, [url, onConversionResults]);
 
-  // Batch convert all imgur links in the text
+  // Batch convert all image URLs in [img] tags
   const batchConvert = useCallback(async () => {
-    if (imgurLinksInText.length === 0) return;
+    if (imageLinksInText.length === 0) return;
 
     setIsConverting(true);
     setResults([]);
     let currentText = text;
-    let currentIndex = 0;
     const savedConversions: SavedConversion[] = [];
 
-    for (let i = 0; i < imgurLinksInText.length; i++) {
-      const imgurUrl = imgurLinksInText[i];
-      setProgress({ current: i + 1, total: imgurLinksInText.length });
+    for (let i = 0; i < imageLinksInText.length; i++) {
+      const imgUrl = imageLinksInText[i];
+      setProgress({ current: i + 1, total: imageLinksInText.length });
 
-      const response = await uploadToImgBB(imgurUrl);
+      const response = await uploadToImgBB(imgUrl);
 
       if (response.success && response.data) {
         const result: ConversionResult = {
-          originalUrl: imgurUrl,
+          originalUrl: imgUrl,
           newUrl: response.data.url,
           success: true,
         };
         setResults((prev) => [...prev, result]);
-        currentText = currentText.split(imgurUrl).join(response.data.url);
+        currentText = currentText.split(imgUrl).join(response.data.url);
 
         savedConversions.push({
           id: crypto.randomUUID(),
-          originalUrl: imgurUrl,
+          originalUrl: imgUrl,
           newUrl: response.data.url,
           thumbnailUrl: response.data.thumb.url,
           success: true,
@@ -110,8 +108,8 @@ export default function ImgurConverter({
         setResults((prev) => [
           ...prev,
           {
-            originalUrl: imgurUrl,
-            newUrl: imgurUrl,
+            originalUrl: imgUrl,
+            newUrl: imgUrl,
             success: false,
             error: response.error,
           },
@@ -119,8 +117,8 @@ export default function ImgurConverter({
 
         savedConversions.push({
           id: crypto.randomUUID(),
-          originalUrl: imgurUrl,
-          newUrl: imgurUrl,
+          originalUrl: imgUrl,
+          newUrl: imgUrl,
           success: false,
           error: response.error,
           savedAt: Date.now(),
@@ -132,7 +130,7 @@ export default function ImgurConverter({
     onConversionResults?.(savedConversions);
     setIsConverting(false);
     setProgress({ current: 0, total: 0 });
-  }, [text, imgurLinksInText, onTextUpdate, onConversionResults]);
+  }, [text, imageLinksInText, onTextUpdate, onConversionResults]);
 
   if (!isOpen) return null;
 
@@ -140,7 +138,7 @@ export default function ImgurConverter({
     <div className="border-b border-white/10 bg-zinc-900/80 backdrop-blur-sm">
       <div className="flex items-center justify-between px-4 py-2">
         <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-          Imgur → ImgBB Converter
+          Image Host → ImgBB
         </span>
         <button
           onClick={onClose}
@@ -186,18 +184,18 @@ export default function ImgurConverter({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs text-zinc-500">
-                {hasImgurLinks
-                  ? `Found ${imgurLinksInText.length} imgur link${
-                      imgurLinksInText.length !== 1 ? "s" : ""
-                    } in your text`
-                  : "No imgur links found in the current text"}
+                {hasImageLinks
+                  ? `Found ${imageLinksInText.length} image link${
+                      imageLinksInText.length !== 1 ? "s" : ""
+                    } in [img] tags (ImgBB links skipped)`
+                  : "No non-ImgBB image links found in [img] tags"}
               </span>
             </div>
 
             {/* Show found links */}
-            {hasImgurLinks && (
+            {hasImageLinks && (
               <div className="max-h-24 overflow-y-auto rounded-lg border border-white/5 bg-zinc-800/40 p-2 space-y-1">
-                {imgurLinksInText.map((link, i) => (
+                {imageLinksInText.map((link, i) => (
                   <div
                     key={i}
                     className="flex items-center gap-2 text-[10px] text-zinc-500 font-mono truncate"
@@ -211,12 +209,14 @@ export default function ImgurConverter({
 
             <button
               onClick={batchConvert}
-              disabled={!hasImgurLinks || isConverting}
+              disabled={!hasImageLinks || isConverting}
               className="w-full rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-400 transition-all hover:bg-emerald-500/20 disabled:opacity-30 disabled:cursor-not-allowed"
             >
               {isConverting
                 ? `Converting ${progress.current}/${progress.total}...`
-                : `Convert ${hasImgurLinks ? imgurLinksInText.length : "All"} Imgur Links → ImgBB`}
+                : `Convert ${hasImageLinks ? imageLinksInText.length : "All"} Image${
+                    imageLinksInText.length !== 1 ? "s" : ""
+                  } → ImgBB`}
             </button>
 
             {/* Progress bar */}
@@ -262,7 +262,7 @@ export default function ImgurConverter({
               type="text"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste imgur URL (e.g., https://imgur.com/abc123)"
+              placeholder="Paste any image URL to convert to ImgBB"
               className="w-full rounded-lg border border-white/10 bg-zinc-800/80 px-3 py-1.5 text-sm text-zinc-200 placeholder-zinc-500 outline-none transition-all focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20"
             />
             <button
