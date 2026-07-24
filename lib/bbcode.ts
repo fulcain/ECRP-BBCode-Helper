@@ -84,7 +84,7 @@ export const tagCategories: TagCategory[] = [
         hotkey: "shift+c",
         description: "Colors text with hex or name",
         hasValue: true,
-        valuePlaceholder: "#FF0000 or red",
+        valuePlaceholder: "#FF0000",
       },
       {
         id: "highlight",
