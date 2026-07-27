@@ -187,8 +187,8 @@ export default function ImgurConverter({
                 {hasImageLinks
                   ? `Found ${imageLinksInText.length} image link${
                       imageLinksInText.length !== 1 ? "s" : ""
-                    } in [img] tags (ImgBB links skipped)`
-                  : "No non-ImgBB image links found in [img] tags"}
+                    } in [img] or [fimg] tags (ImgBB links skipped)`
+                  : "No non-ImgBB image links found in [img] or [fimg] tags"}
               </span>
             </div>
 

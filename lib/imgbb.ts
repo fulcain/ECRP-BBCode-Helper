@@ -59,13 +59,21 @@ function isImgBBUrl(url: string): boolean {
   }
 }
 
-/** Find all image URLs inside [img]...[/img] tags, skipping ImgBB URLs */
+/** Find all image URLs inside [img]...[/img] or [fimg]...[/fimg] tags, skipping ImgBB URLs */
 export function findAllImgTagUrls(text: string): string[] {
   const urls: string[] = [];
   // Match [img]URL[/img] with optional whitespace
-  const pattern = /\[img\]\s*(https?:\/\/[^\]\s]+)\s*\[\/img\]/gi;
+  const imgPattern = /\[img\]\s*(https?:\/\/[^\]\s]+)\s*\[\/img\]/gi;
   let match;
-  while ((match = pattern.exec(text)) !== null) {
+  while ((match = imgPattern.exec(text)) !== null) {
+    const url = match[1].trim();
+    if (!isImgBBUrl(url) && !urls.includes(url)) {
+      urls.push(url);
+    }
+  }
+  // Match [fimg=WIDTH,HEIGHT]URL[/fimg] with optional whitespace
+  const fimgPattern = /\[fimg=[^\]]*\]\s*(https?:\/\/[^\]\s]+)\s*\[\/fimg\]/gi;
+  while ((match = fimgPattern.exec(text)) !== null) {
     const url = match[1].trim();
     if (!isImgBBUrl(url) && !urls.includes(url)) {
       urls.push(url);
