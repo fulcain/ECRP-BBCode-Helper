@@ -90,6 +90,17 @@ export default function ConvertPage() {
     ]);
   }, []);
 
+  // ─── Remove a single result (grid + localStorage) ──────────────────────
+  const removeResult = useCallback((resultId: string, deleteUrl?: string) => {
+    setResults((prev) => prev.filter((r) => r.id !== resultId));
+    const saved = loadConversions();
+    saveConversions(saved.filter((s) => s.id !== resultId));
+    // If ImgBB delete URL exists, open it too
+    if (deleteUrl) {
+      window.open(deleteUrl, "_blank");
+    }
+  }, []);
+
   // ─── Reset All ───────────────────────────────────────────────────────
   const handleResetAll = useCallback(() => {
     showConfirm({
@@ -244,6 +255,26 @@ export default function ConvertPage() {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  // Remove all failed results (grid + localStorage)
+  const removeFailedResults = () => {
+    const failedCount = results.filter((r) => !r.success).length;
+    if (failedCount === 0) return;
+    showConfirm({
+      title: "Remove Failed Uploads",
+      message: `Remove ${failedCount} failed conversion${failedCount !== 1 ? "s" : ""} from the grid and saved history?`,
+      confirmLabel: "Remove",
+      cancelLabel: "Cancel",
+      variant: "danger",
+    }).then((confirmed) => {
+      if (confirmed) {
+        setResults((prev) => prev.filter((r) => r.success));
+        const saved = loadConversions();
+        saveConversions(saved.filter((s) => s.success));
+        addToast(`Removed ${failedCount} failed conversion${failedCount !== 1 ? "s" : ""}`, "info");
+      }
+    });
   };
 
   // Clear all results (grid + localStorage)
@@ -488,7 +519,21 @@ export default function ConvertPage() {
                     {successCount} successful
                   </span>
                 )}
+                {results.length - successCount > 0 && (
+                  <span className="text-red-400/50 ml-2">
+                    {results.length - successCount} failed
+                  </span>
+                )}
               </span>
+
+              {results.length - successCount > 0 && (
+                <button
+                  onClick={removeFailedResults}
+                  className="rounded-lg border border-rose-500/15 bg-rose-500/5 px-2.5 py-1 text-[10px] font-medium text-rose-400/80 transition-all hover:bg-rose-500/10 hover:text-rose-300"
+                >
+                  Remove {results.length - successCount} failed
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -507,10 +552,40 @@ export default function ConvertPage() {
                         loading="lazy"
                       />
                     ) : (
-                      <div className="flex items-center justify-center h-full">
-                        <div className="text-center">
-                          <span className="text-2xl">❌</span>
-                          <p className="text-[10px] text-red-400/70 mt-1">Upload failed</p>
+                      <div className="relative h-full">
+                        <div className="flex items-center justify-center h-full">
+                          <div className="text-center">
+                            <span className="text-2xl">❌</span>
+                            <p className="text-[10px] text-red-400/70 mt-1">Upload failed</p>
+                          </div>
+                        </div>
+
+                        {/* Always-visible remove (touch-friendly) */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeResult(result.id);
+                          }}
+                          title="Remove failed conversion"
+                          aria-label="Remove failed conversion"
+                          className="absolute top-1.5 right-1.5 rounded-md border border-red-500/20 bg-black/60 p-1 text-red-300/80 backdrop-blur-sm transition-all hover:bg-red-500/40 hover:text-white"
+                        >
+                          <svg width="10" height="10" viewBox="0 0 14 14" fill="none">
+                            <path d="M1 1L13 13M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                          </svg>
+                        </button>
+
+                        {/* Remove failed on hover */}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all duration-200 flex items-center justify-center opacity-0 group-hover:opacity-100">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeResult(result.id);
+                            }}
+                            className="rounded-lg border border-red-500/30 bg-black/50 px-2.5 py-1 text-[9px] font-medium text-red-300 backdrop-blur-sm transition-all hover:bg-red-500/50 hover:text-white"
+                          >
+                            Remove
+                          </button>
                         </div>
                       </div>
                     )}
@@ -529,15 +604,7 @@ export default function ConvertPage() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            // Remove from grid
-                            setResults((prev) => prev.filter((r) => r.id !== result.id));
-                            // Remove from localStorage
-                            const saved = loadConversions();
-                            saveConversions(saved.filter((s) => s.id !== result.id));
-                            // If ImgBB delete URL exists, open it too
-                            if (result.deleteUrl) {
-                              window.open(result.deleteUrl, "_blank");
-                            }
+                            removeResult(result.id, result.deleteUrl);
                           }}
                           className="rounded-lg border border-white/20 bg-black/50 px-2.5 py-1 text-[9px] font-medium text-zinc-400 backdrop-blur-sm transition-all hover:bg-red-500/50 hover:text-white"
                         >
