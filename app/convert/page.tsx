@@ -34,6 +34,7 @@ export default function ConvertPage() {
   const [results, setResults] = useState<ImageConvertResult[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [clipboardProgress, setClipboardProgress] = useState<{ current: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ─── Load saved conversions into the grid on mount ────────────────────
@@ -90,79 +91,183 @@ export default function ConvertPage() {
     ]);
   }, []);
 
-  // ─── Upload an image pasted from the clipboard ───────────────────────
-  const convertClipboardImage = useCallback(
-    async (file: File) => {
-      const name = file.name || "clipboard-image.png";
+  // ─── Upload images pasted from the clipboard (sequentially) ──────────
+  // ─── Dedupe clipboard images by content hash (identical ones skipped) ──
+  const dedupeClipboardFiles = useCallback(async (files: File[]): Promise<File[]> => {
+    const seen = new Set<string>();
+    const unique: File[] = [];
+    for (const file of files) {
+      let hash = "";
+      try {
+        const buf = await file.arrayBuffer();
+        const digest = await crypto.subtle.digest("SHA-256", buf);
+        hash = Array.from(new Uint8Array(digest))
+          .slice(0, 8)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+      } catch {
+        hash = `${file.type}:${file.size}`;
+      }
+      if (!seen.has(hash)) {
+        seen.add(hash);
+        unique.push(file);
+      }
+    }
+    return unique;
+  }, []);
+
+  // ─── Upload images pasted from the clipboard (sequentially) ──────────
+  const convertClipboardImages = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+
       setIsConverting(true);
-      addToast("Uploading image from clipboard...", "info");
 
-      const response = await uploadFileToImgBB(file, name);
+      let successCount = 0;
 
-      if (response.success && response.data) {
-        const result: ImageConvertResult = {
-          id: response.data.id,
-          originalName: `📋 ${name}`,
-          thumbnailUrl: response.data.thumb.url,
-          directUrl: response.data.url,
-          bbCodeUrl: `[img]${response.data.url}[/img]`,
-          deleteUrl: response.data.delete_url,
-          size: response.data.size,
-          success: true,
-        };
-        persistAndShow(result);
-        addToast("Image uploaded from clipboard!", "success");
-      } else {
-        persistFailed(name, response.error);
-        addToast(`Failed: ${response.error}`, "error");
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const name = file.name || "clipboard-image.png";
+        setClipboardProgress({ current: i + 1, total: files.length });
+
+        const response = await uploadFileToImgBB(file, name);
+
+        if (response.success && response.data) {
+          const result: ImageConvertResult = {
+            id: response.data.id,
+            originalName: `📋 ${name}`,
+            thumbnailUrl: response.data.thumb.url,
+            directUrl: response.data.url,
+            bbCodeUrl: `[img]${response.data.url}[/img]`,
+            deleteUrl: response.data.delete_url,
+            size: response.data.size,
+            success: true,
+          };
+          persistAndShow(result);
+          successCount++;
+        } else {
+          persistFailed(name, response.error);
+          addToast(`Failed: ${name} - ${response.error}`, "error");
+        }
       }
 
+      addToast(
+        successCount === 0
+          ? "Clipboard upload failed"
+          : files.length === 1
+          ? "Image uploaded from clipboard!"
+          : `Uploaded ${successCount} of ${files.length} images from clipboard`,
+        successCount === 0 ? "error" : "success"
+      );
+
+      setClipboardProgress(null);
       setIsConverting(false);
     },
     [addToast, persistAndShow, persistFailed]
   );
 
-  // ─── Global paste handler: Ctrl+V with an image on the clipboard ─────
+  // ─── Preview clipboard image(s) + confirm before uploading ──────────
+  const previewAndUploadClipboard = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+
+      const unique = await dedupeClipboardFiles(files);
+      if (unique.length === 0) {
+        addToast("No new images — the clipboard matches an existing one", "info");
+        return;
+      }
+
+      // Object URLs keep the thumbnails alive while the modal is open
+      const urls = unique.map((f) => URL.createObjectURL(f));
+
+      const confirmed = await showConfirm({
+        title: unique.length === 1 ? "Upload this image?" : `Upload ${unique.length} images?`,
+        message:
+          unique.length === 1
+            ? "This image is on your clipboard. Upload it to ImgBB and add it to your history?"
+            : `These ${unique.length} images are on your clipboard. Upload them to ImgBB and add them to your history?`,
+        confirmLabel: unique.length === 1 ? "Upload" : `Upload ${unique.length}`,
+        cancelLabel: "Cancel",
+        content: (
+          <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+            {unique.map((f, i) => (
+              <div
+                key={i}
+                className="w-20 shrink-0 overflow-hidden rounded-lg border border-white/[0.06] bg-zinc-800/50"
+                title={f.name}
+              >
+                <img
+                  src={urls[i]}
+                  alt={f.name}
+                  className="h-14 w-full object-cover"
+                />
+                <div className="truncate px-1 py-0.5 text-[8px] text-zinc-500">
+                  {f.name}
+                </div>
+              </div>
+            ))}
+          </div>
+        ),
+      });
+
+      urls.forEach((u) => URL.revokeObjectURL(u));
+
+      if (confirmed) {
+        convertClipboardImages(unique);
+      } else {
+        addToast("Clipboard upload cancelled", "info");
+      }
+    },
+    [dedupeClipboardFiles, showConfirm, convertClipboardImages, addToast]
+  );
+
+  // ─── Global paste handler: Ctrl+V with image(s) on the clipboard ─────
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (!items) return;
+      const files: File[] = [];
       for (const item of items) {
         if (item.type.startsWith("image/")) {
           e.preventDefault();
           const file = item.getAsFile();
-          if (file) convertClipboardImage(file);
-          break;
+          if (file) files.push(file);
         }
       }
+      if (files.length === 0) return;
+      previewAndUploadClipboard(files);
     };
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [convertClipboardImage]);
+  }, [previewAndUploadClipboard]);
 
   // ─── "Paste from Clipboard" button (falls back to Ctrl+V hint) ────────
   const pasteFromClipboard = useCallback(async () => {
     try {
       if (navigator.clipboard?.read) {
         const items = await navigator.clipboard.read();
+        const files: File[] = [];
         for (const item of items) {
           const imageType = item.types.find((t) => t.startsWith("image/"));
           if (imageType) {
             const blob = await item.getType(imageType);
-            convertClipboardImage(
-              new File([blob], "clipboard-image.png", { type: imageType })
+            files.push(
+              new File([blob], `clipboard-image-${files.length + 1}.png`, { type: imageType })
             );
-            return;
           }
         }
-        addToast("No image found in clipboard", "warning");
+        if (files.length > 0) {
+          previewAndUploadClipboard(files);
+        } else {
+          addToast("No image found in clipboard", "warning");
+        }
       } else {
         addToast("Clipboard API unavailable — press Ctrl+V to paste instead", "warning");
       }
     } catch {
       addToast("Couldn't read clipboard — press Ctrl+V to paste instead", "warning");
     }
-  }, [addToast, convertClipboardImage]);
+  }, [addToast, previewAndUploadClipboard]);
 
   // ─── Remove a single result (grid + localStorage) ──────────────────────
   const removeResult = useCallback((resultId: string, deleteUrl?: string) => {
@@ -608,10 +713,10 @@ export default function ConvertPage() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-zinc-300">
-                    Copy an image, then paste it here
+                    Copy one or more images, then paste them here
                   </p>
                   <p className="text-[10px] text-zinc-600 mt-0.5">
-                    Screenshots & images copied from the web — press Ctrl+V anywhere on this page
+                    Screenshots & images copied from the web — press Ctrl+V anywhere on this page, multiple images upload one by one
                   </p>
                 </div>
                 <button
@@ -638,7 +743,9 @@ export default function ConvertPage() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                 </svg>
-                Uploading image from clipboard...
+                {clipboardProgress && clipboardProgress.total > 1
+                  ? `Uploading ${clipboardProgress.current}/${clipboardProgress.total} images from clipboard...`
+                  : "Uploading image from clipboard..."}
               </div>
             )}
           </div>

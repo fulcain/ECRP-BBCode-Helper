@@ -9,6 +9,8 @@ export interface ConfirmConfig {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: "danger" | "default";
+  /** Optional custom content rendered below the message (e.g. image previews) */
+  content?: ReactNode;
 }
 
 export interface PromptConfig {
@@ -189,6 +191,11 @@ export function ModalProvider({ children }: { children: ReactNode }) {
                 <p className="text-xs text-zinc-400 leading-relaxed mb-4">
                   {modal.message}
                 </p>
+
+                {/* Custom content (e.g. image previews) */}
+                {modal.type === "confirm" && modal.content && (
+                  <div className="mb-4">{modal.content}</div>
+                )}
 
                 {/* Prompt input */}
                 {modal.type === "prompt" && (
