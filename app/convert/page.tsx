@@ -7,7 +7,7 @@ import { useModal } from "@/components/Modal";
 import { loadConversions, saveConversions, clearAllData } from "@/lib/storage";
 import Link from "next/link";
 
-type InputMode = "url" | "file";
+type InputMode = "url" | "file" | "clipboard";
 
 /** Convert a SavedConversion into an ImageConvertResult for display in the grid */
 function savedToResult(conv: { id: string; originalUrl: string; newUrl: string; thumbnailUrl?: string; success: boolean; error?: string; savedAt: number }): ImageConvertResult {
@@ -89,6 +89,80 @@ export default function ConvertPage() {
       ...prev,
     ]);
   }, []);
+
+  // ─── Upload an image pasted from the clipboard ───────────────────────
+  const convertClipboardImage = useCallback(
+    async (file: File) => {
+      const name = file.name || "clipboard-image.png";
+      setIsConverting(true);
+      addToast("Uploading image from clipboard...", "info");
+
+      const response = await uploadFileToImgBB(file, name);
+
+      if (response.success && response.data) {
+        const result: ImageConvertResult = {
+          id: response.data.id,
+          originalName: `📋 ${name}`,
+          thumbnailUrl: response.data.thumb.url,
+          directUrl: response.data.url,
+          bbCodeUrl: `[img]${response.data.url}[/img]`,
+          deleteUrl: response.data.delete_url,
+          size: response.data.size,
+          success: true,
+        };
+        persistAndShow(result);
+        addToast("Image uploaded from clipboard!", "success");
+      } else {
+        persistFailed(name, response.error);
+        addToast(`Failed: ${response.error}`, "error");
+      }
+
+      setIsConverting(false);
+    },
+    [addToast, persistAndShow, persistFailed]
+  );
+
+  // ─── Global paste handler: Ctrl+V with an image on the clipboard ─────
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) convertClipboardImage(file);
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [convertClipboardImage]);
+
+  // ─── "Paste from Clipboard" button (falls back to Ctrl+V hint) ────────
+  const pasteFromClipboard = useCallback(async () => {
+    try {
+      if (navigator.clipboard?.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find((t) => t.startsWith("image/"));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            convertClipboardImage(
+              new File([blob], "clipboard-image.png", { type: imageType })
+            );
+            return;
+          }
+        }
+        addToast("No image found in clipboard", "warning");
+      } else {
+        addToast("Clipboard API unavailable — press Ctrl+V to paste instead", "warning");
+      }
+    } catch {
+      addToast("Couldn't read clipboard — press Ctrl+V to paste instead", "warning");
+    }
+  }, [addToast, convertClipboardImage]);
 
   // ─── Remove a single result (grid + localStorage) ──────────────────────
   const removeResult = useCallback((resultId: string, deleteUrl?: string) => {
@@ -396,6 +470,22 @@ export default function ConvertPage() {
               Upload File
             </span>
           </button>
+          <button
+            onClick={() => setInputMode("clipboard")}
+            className={`rounded-lg px-3 py-1.5 text-[11px] font-medium transition-all ${
+              inputMode === "clipboard"
+                ? "bg-zinc-700/50 text-white border border-white/[0.08]"
+                : "text-zinc-500 hover:text-zinc-300 border border-transparent"
+            }`}
+          >
+            <span className="flex items-center gap-1.5">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+              </svg>
+              Paste Image
+            </span>
+          </button>
         </div>
 
         {/* URL Input */}
@@ -491,6 +581,68 @@ export default function ConvertPage() {
             )}
           </div>
         )}
+
+        {/* Paste from Clipboard */}
+        {inputMode === "clipboard" && (
+          <div>
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={pasteFromClipboard}
+              className={`
+                relative cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all duration-200
+                ${
+                  dragOver
+                    ? "border-cyan-500/50 bg-cyan-500/5"
+                    : "border-white/[0.06] bg-zinc-800/20 hover:border-white/[0.12] hover:bg-zinc-800/30"
+                }
+              `}
+            >
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-800/50 border border-white/[0.04]">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-400">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-zinc-300">
+                    Copy an image, then paste it here
+                  </p>
+                  <p className="text-[10px] text-zinc-600 mt-0.5">
+                    Screenshots & images copied from the web — press Ctrl+V anywhere on this page
+                  </p>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    pasteFromClipboard();
+                  }}
+                  className="mt-1 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-2 text-xs font-medium text-cyan-400 transition-all hover:bg-cyan-500/20"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                    Paste from Clipboard
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {isConverting && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
+                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                Uploading image from clipboard...
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Results Grid — unified: shows both session + saved */}
@@ -506,7 +658,7 @@ export default function ConvertPage() {
             </div>
             <h3 className="text-sm font-medium text-zinc-500">No conversions yet</h3>
             <p className="text-xs text-zinc-700 mt-1 max-w-xs">
-              Paste an image URL or upload files above. Converted images will appear here and persist across sessions.
+              Paste an image URL, upload files, or press Ctrl+V with a copied image. Converted images will appear here and persist across sessions.
             </p>
           </div>
         ) : (
