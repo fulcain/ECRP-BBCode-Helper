@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "BBCode Helper - ECRP",
   description:
-    "A powerful BBCode editor for Eclipse Roleplay with hotkeys, find & replace, and Imgur to ImgBB conversion.",
+    "A powerful BBCode editor for Eclipse Roleplay with hotkeys, find & replace, and image link conversion.",
   icons: {
     icon: "/favicon.ico",
   },

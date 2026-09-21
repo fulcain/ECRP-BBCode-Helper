@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { uploadToImgBB, uploadFileToImgBB, type ImageConvertResult } from "@/lib/imgbb";
+import { uploadImage, IMAGE_HOST_LABELS, type ImageConvertResult } from "@/lib/imagehost";
+import { loadImageHost, saveImageHost, type ImageHost } from "@/lib/storage";
 import { useToasts } from "@/components/Toast";
 import { useModal } from "@/components/Modal";
 import { loadConversions, saveConversions, clearAllData } from "@/lib/storage";
@@ -35,7 +36,13 @@ export default function ConvertPage() {
   const [dragOver, setDragOver] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [clipboardProgress, setClipboardProgress] = useState<{ current: number; total: number } | null>(null);
+  const [host, setHost] = useState<ImageHost>(() => loadImageHost());
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const pickHost = (h: ImageHost) => {
+    setHost(h);
+    saveImageHost(h);
+  };
 
   // ─── Load saved conversions into the grid on mount ────────────────────
   useEffect(() => {
@@ -130,16 +137,16 @@ export default function ConvertPage() {
         const name = file.name || "clipboard-image.png";
         setClipboardProgress({ current: i + 1, total: files.length });
 
-        const response = await uploadFileToImgBB(file, name);
+        const response = await uploadImage({ file, filename: name, preferred: host });
 
         if (response.success && response.data) {
           const result: ImageConvertResult = {
             id: response.data.id,
             originalName: `📋 ${name}`,
-            thumbnailUrl: response.data.thumb.url,
+            thumbnailUrl: response.data.thumbUrl,
             directUrl: response.data.url,
             bbCodeUrl: `[img]${response.data.url}[/img]`,
-            deleteUrl: response.data.delete_url,
+            deleteUrl: response.data.deleteUrl ?? "",
             size: response.data.size,
             success: true,
           };
@@ -163,7 +170,7 @@ export default function ConvertPage() {
       setClipboardProgress(null);
       setIsConverting(false);
     },
-    [addToast, persistAndShow, persistFailed]
+    [addToast, persistAndShow, persistFailed, host]
   );
 
   // ─── Preview clipboard image(s) + confirm before uploading ──────────
@@ -184,8 +191,8 @@ export default function ConvertPage() {
         title: unique.length === 1 ? "Upload this image?" : `Upload ${unique.length} images?`,
         message:
           unique.length === 1
-            ? "This image is on your clipboard. Upload it to ImgBB and add it to your history?"
-            : `These ${unique.length} images are on your clipboard. Upload them to ImgBB and add them to your history?`,
+            ? "This image is on your clipboard. Upload it and add it to your history?"
+            : `These ${unique.length} images are on your clipboard. Upload them and add them to your history?`,
         confirmLabel: unique.length === 1 ? "Upload" : `Upload ${unique.length}`,
         cancelLabel: "Cancel",
         content: (
@@ -311,17 +318,17 @@ export default function ConvertPage() {
     }
 
     setIsConverting(true);
-    const response = await uploadToImgBB(trimmed);
+    const response = await uploadImage({ url: trimmed, preferred: host });
 
     if (response.success && response.data) {
       const result: ImageConvertResult = {
         id: response.data.id,
         originalName: trimmed.split("/").pop() || "image",
         originalUrl: trimmed,
-        thumbnailUrl: response.data.thumb.url,
+        thumbnailUrl: response.data.thumbUrl,
         directUrl: response.data.url,
         bbCodeUrl: `[img]${response.data.url}[/img]`,
-        deleteUrl: response.data.delete_url,
+        deleteUrl: response.data.deleteUrl ?? "",
         size: response.data.size,
         success: true,
       };
@@ -333,7 +340,7 @@ export default function ConvertPage() {
       persistFailed(trimmed, response.error);
     }
     setIsConverting(false);
-  }, [urlInput, addToast, persistAndShow, persistFailed]);
+  }, [urlInput, addToast, persistAndShow, persistFailed, host]);
 
   // Handle Enter key on URL input
   const handleUrlKeyDown = (e: React.KeyboardEvent) => {
@@ -361,16 +368,16 @@ export default function ConvertPage() {
         const file = imageFiles[i];
         addToast(`Converting ${i + 1}/${imageFiles.length}: ${file.name}`, "info");
 
-        const response = await uploadFileToImgBB(file);
+        const response = await uploadImage({ file, preferred: host });
 
         if (response.success && response.data) {
           const result: ImageConvertResult = {
             id: response.data.id,
             originalName: file.name,
-            thumbnailUrl: response.data.thumb.url,
+            thumbnailUrl: response.data.thumbUrl,
             directUrl: response.data.url,
             bbCodeUrl: `[img]${response.data.url}[/img]`,
-            deleteUrl: response.data.delete_url,
+            deleteUrl: response.data.deleteUrl ?? "",
             size: response.data.size,
             success: true,
           };
@@ -384,7 +391,7 @@ export default function ConvertPage() {
       addToast(`Converted ${imageFiles.length} image(s)`, "success");
       setIsConverting(false);
     },
-    [addToast, persistAndShow, persistFailed]
+    [addToast, persistAndShow, persistFailed, host]
   );
 
   // File input change
@@ -504,12 +511,30 @@ export default function ConvertPage() {
                 <h1 className="text-sm font-semibold text-white/90 tracking-tight leading-tight">
                   Image Converter
                 </h1>
-                <p className="text-[10px] text-zinc-600 leading-tight">Upload → ImgBB</p>
+                <p className="text-[10px] text-zinc-600 leading-tight">Upload → ImgBB / ImageKit</p>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Host selector */}
+            <div className="flex items-center gap-1 rounded-lg border border-white/[0.04] bg-zinc-800/30 p-1">
+              {(['imgbb', 'imagekit'] as ImageHost[]).map((h) => (
+                <button
+                  key={h}
+                  onClick={() => pickHost(h)}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-all ${
+                    host === h
+                      ? "bg-emerald-500/15 text-emerald-300"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                  title={`Upload via ${IMAGE_HOST_LABELS[h]} — the other host is used as automatic fallback`}
+                >
+                  {IMAGE_HOST_LABELS[h]}
+                </button>
+              ))}
+            </div>
+
             {results.length > 0 && (
               <button
                 onClick={clearResults}

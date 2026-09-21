@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import BBCodeToolbar from "@/components/BBCodeToolbar";
 import FindReplace from "@/components/FindReplace";
-import ImgurConverter from "@/components/ImgurConverter";
+import ImageLinkConverter from "@/components/ImageLinkConverter";
 import { useToasts } from "@/components/Toast";
 import { useModal } from "@/components/Modal";
 import { tagCategories, type BBCodeTag } from "@/lib/bbcode";
@@ -349,14 +349,14 @@ export default function Home() {
                   ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 shadow-lg shadow-emerald-500/5"
                   : "border-white/[0.04] bg-zinc-800/30 text-zinc-400 hover:border-white/[0.08] hover:bg-zinc-800/50 hover:text-zinc-200"
               }`}
-              title="Imgur to ImgBB Converter (Ctrl+Shift+U)"
+              title="Image Link Converter (Ctrl+Shift+U)"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
                 <circle cx="8.5" cy="8.5" r="1.5"/>
                 <polyline points="21 15 16 10 5 21"/>
               </svg>
-              <span className="hidden sm:inline">Imgur</span>
+              <span className="hidden sm:inline">Converter</span>
             </button>
 
             {/* Quick insert list item */}
@@ -448,7 +448,7 @@ export default function Home() {
       <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
         showImgurConverter ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
       }`}>
-        <ImgurConverter
+        <ImageLinkConverter
           text={text}
           onTextUpdate={(newText) => updateStats(newText)}
           isOpen={true}

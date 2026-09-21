@@ -8,7 +8,11 @@ const STORAGE_KEYS = {
   EDITOR_TEXT: "bbcode-editor-text",
   CONVERSIONS: "bbcode-conversions",
   SAVED_AT: "bbcode-saved-at",
+  IMAGE_HOST: "bbcode-image-host",
 } as const;
+
+/** Which image host uploads go to (the other host is the automatic fallback) */
+export type ImageHost = "imgbb" | "imagekit";
 
 /** Saved conversion entry */
 export interface SavedConversion {
@@ -59,6 +63,25 @@ export function saveConversions(conversions: SavedConversion[]): void {
     // Keep at most 100 entries to avoid bloating localStorage
     const trimmed = conversions.slice(0, 100);
     localStorage.setItem(STORAGE_KEYS.CONVERSIONS, JSON.stringify(trimmed));
+  } catch {
+    // Silently fail
+  }
+}
+
+// ─── Preferred image host ──────────────────────────────────────────────────
+
+export function loadImageHost(): ImageHost {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.IMAGE_HOST);
+    return raw === "imagekit" ? "imagekit" : "imgbb";
+  } catch {
+    return "imgbb";
+  }
+}
+
+export function saveImageHost(host: ImageHost): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.IMAGE_HOST, host);
   } catch {
     // Silently fail
   }

@@ -2,14 +2,19 @@
 
 import { useState, useCallback } from "react";
 import {
-  uploadToImgBB,
+  uploadImage,
   findAllImgTagUrls,
+  IMAGE_HOST_LABELS,
   type ConversionResult,
-} from "@/lib/imgbb";
+} from "@/lib/imagehost";
+import {
+  loadImageHost,
+  saveImageHost,
+  type ImageHost,
+  type SavedConversion,
+} from "@/lib/storage";
 
-import type { SavedConversion } from "@/lib/storage";
-
-interface ImgurConverterProps {
+interface ImageLinkConverterProps {
   text: string;
   onTextUpdate: (newText: string) => void;
   isOpen: boolean;
@@ -17,23 +22,31 @@ interface ImgurConverterProps {
   onConversionResults?: (results: SavedConversion[]) => void;
 }
 
-export default function ImgurConverter({
+export default function ImageLinkConverter({
   text,
   onTextUpdate,
   isOpen,
   onClose,
   onConversionResults,
-}: ImgurConverterProps) {
+}: ImageLinkConverterProps) {
   const [url, setUrl] = useState("");
   const [isBatchMode, setIsBatchMode] = useState(true);
   const [isConverting, setIsConverting] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [results, setResults] = useState<ConversionResult[]>([]);
   const [singleResult, setSingleResult] = useState<string | null>(null);
+  const [host, setHost] = useState<ImageHost>(() => loadImageHost());
 
-  // Scan for image URLs inside [img] tags (skip ImgBB)
+  const otherHost = host === "imgbb" ? "imagekit" : "imgbb";
+
+  // Scan for image URLs inside [img] tags (skip links already on ImgBB/ImageKit)
   const imageLinksInText = findAllImgTagUrls(text);
   const hasImageLinks = imageLinksInText.length > 0;
+
+  const pickHost = (h: ImageHost) => {
+    setHost(h);
+    saveImageHost(h);
+  };
 
   // Convert a single URL
   const convertSingleUrl = useCallback(async () => {
@@ -46,14 +59,14 @@ export default function ImgurConverter({
     setIsConverting(true);
     setSingleResult(null);
 
-    const response = await uploadToImgBB(trimmed);
+    const response = await uploadImage({ url: trimmed, preferred: host });
     if (response.success && response.data) {
       setSingleResult(`✅ Converted! Direct URL: ${response.data.url}`);
       onConversionResults?.([{
         id: crypto.randomUUID(),
         originalUrl: trimmed,
         newUrl: response.data.url,
-        thumbnailUrl: response.data.thumb.url,
+        thumbnailUrl: response.data.thumbUrl,
         success: true,
         savedAt: Date.now(),
       }]);
@@ -70,7 +83,7 @@ export default function ImgurConverter({
     }
 
     setIsConverting(false);
-  }, [url, onConversionResults]);
+  }, [url, host, onConversionResults]);
 
   // Batch convert all image URLs in [img] tags
   const batchConvert = useCallback(async () => {
@@ -85,7 +98,7 @@ export default function ImgurConverter({
       const imgUrl = imageLinksInText[i];
       setProgress({ current: i + 1, total: imageLinksInText.length });
 
-      const response = await uploadToImgBB(imgUrl);
+      const response = await uploadImage({ url: imgUrl, preferred: host });
 
       if (response.success && response.data) {
         const result: ConversionResult = {
@@ -100,7 +113,7 @@ export default function ImgurConverter({
           id: crypto.randomUUID(),
           originalUrl: imgUrl,
           newUrl: response.data.url,
-          thumbnailUrl: response.data.thumb.url,
+          thumbnailUrl: response.data.thumbUrl,
           success: true,
           savedAt: Date.now(),
         });
@@ -130,7 +143,7 @@ export default function ImgurConverter({
     onConversionResults?.(savedConversions);
     setIsConverting(false);
     setProgress({ current: 0, total: 0 });
-  }, [text, imageLinksInText, onTextUpdate, onConversionResults]);
+  }, [text, imageLinksInText, host, onTextUpdate, onConversionResults]);
 
   if (!isOpen) return null;
 
@@ -138,7 +151,7 @@ export default function ImgurConverter({
     <div className="border-b border-white/10 bg-zinc-900/80 backdrop-blur-sm">
       <div className="flex items-center justify-between px-4 py-2">
         <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-          Image Host → ImgBB
+          Image Link Converter
         </span>
         <button
           onClick={onClose}
@@ -156,6 +169,36 @@ export default function ImgurConverter({
       </div>
 
       <div className="px-4 pb-3 space-y-3">
+        {/* Host selector */}
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">
+            Host
+          </span>
+          <button
+            onClick={() => pickHost("imgbb")}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+              host === "imgbb"
+                ? "bg-violet-500/20 text-violet-300 border border-violet-500/30"
+                : "bg-zinc-800/60 text-zinc-400 border border-white/5 hover:text-white"
+            }`}
+          >
+            ImgBB
+          </button>
+          <button
+            onClick={() => pickHost("imagekit")}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+              host === "imagekit"
+                ? "bg-violet-500/20 text-violet-300 border border-violet-500/30"
+                : "bg-zinc-800/60 text-zinc-400 border border-white/5 hover:text-white"
+            }`}
+          >
+            ImageKit
+          </button>
+          <span className="text-[10px] text-zinc-600 truncate">
+            Fallback: {IMAGE_HOST_LABELS[otherHost]} if {IMAGE_HOST_LABELS[host]} fails
+          </span>
+        </div>
+
         {/* Mode toggle */}
         <div className="flex items-center gap-2">
           <button
@@ -187,8 +230,8 @@ export default function ImgurConverter({
                 {hasImageLinks
                   ? `Found ${imageLinksInText.length} image link${
                       imageLinksInText.length !== 1 ? "s" : ""
-                    } in [img] or [fimg] tags (ImgBB links skipped)`
-                  : "No non-ImgBB image links found in [img] or [fimg] tags"}
+                    } in [img] or [fimg] tags (hosted links skipped)`
+                  : "No unhosted image links found in [img] or [fimg] tags"}
               </span>
             </div>
 
@@ -216,7 +259,7 @@ export default function ImgurConverter({
                 ? `Converting ${progress.current}/${progress.total}...`
                 : `Convert ${hasImageLinks ? imageLinksInText.length : "All"} Image${
                     imageLinksInText.length !== 1 ? "s" : ""
-                  } → ImgBB`}
+                  } → ${IMAGE_HOST_LABELS[host]}`}
             </button>
 
             {/* Progress bar */}
@@ -262,7 +305,7 @@ export default function ImgurConverter({
               type="text"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste any image URL to convert to ImgBB"
+              placeholder={`Paste any image URL to convert to ${IMAGE_HOST_LABELS[host]}`}
               className="w-full rounded-lg border border-white/10 bg-zinc-800/80 px-3 py-1.5 text-sm text-zinc-200 placeholder-zinc-500 outline-none transition-all focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20"
             />
             <button
@@ -270,7 +313,7 @@ export default function ImgurConverter({
               disabled={!url || isConverting}
               className="w-full rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 transition-all hover:bg-emerald-500/20 disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              {isConverting ? "Converting..." : "Convert to ImgBB"}
+              {isConverting ? "Converting..." : `Convert to ${IMAGE_HOST_LABELS[host]}`}
             </button>
             {singleResult && (
               <div className="rounded-lg border border-white/5 bg-zinc-800/40 p-2 text-xs font-mono text-zinc-400 truncate">
